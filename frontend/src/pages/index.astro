@@ -1,0 +1,678 @@
+---
+import Layout from '../layouts/Layout.astro';
+import Header from '../components/Header.astro';
+---
+
+<Layout title="Analista de Tesis Full-Stack - Auditoría de Tutor Académico">
+  <Header />
+
+  <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
+
+    <!-- UPLOAD & CONFIG -->
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl relative overflow-hidden">
+      <div class="absolute top-0 right-0 -mt-10 -mr-10 w-56 h-56 bg-indigo-600/10 rounded-full blur-3xl pointer-events-none"></div>
+
+      <div class="space-y-4">
+        <div>
+          <h2 class="text-xl font-bold text-white flex items-center gap-2">
+            <span>📄</span>
+            Subir Tesis en PDF para Auditoría de Tutor
+          </h2>
+          <p class="text-sm text-slate-400 mt-1">
+            Evalúa <strong>dominio del campo</strong>, <strong>jerarquía de fuentes</strong>, <strong>actualidad</strong>, <strong>uso real en el texto</strong>, <strong>integridad académica</strong> (cruce de citas + verificación real en Crossref, OpenAlex, DuckDuckGo y Crawl4AI) y <strong>aspectos formales</strong> usando <strong>Gemini 3.6 con rotación de claves</strong>.
+          </p>
+        </div>
+
+        <form id="uploadForm" class="grid grid-cols-1 md:grid-cols-12 gap-4 pt-2">
+          <div class="md:col-span-12">
+            <label
+              id="dropZone"
+              for="pdfInput"
+              class="flex flex-col items-center justify-center w-full h-36 border-2 border-dashed border-slate-700 hover:border-indigo-500 bg-slate-950/70 rounded-2xl cursor-pointer transition-colors px-4 text-center"
+            >
+              <span class="text-2xl mb-1">📥</span>
+              <span id="fileLabel" class="text-sm font-medium text-slate-200">
+                Arrastrá el PDF de la tesis aquí o hacé clic para seleccionarlo
+              </span>
+              <span class="text-xs text-slate-500 mt-1">Formato .pdf (máximo 50 MB)</span>
+              <input id="pdfInput" type="file" accept=".pdf,application/pdf" class="hidden" required />
+            </label>
+          </div>
+
+          <div class="md:col-span-7">
+            <label class="block text-xs font-medium text-slate-300 mb-1">Tema o Área de la Tesis (opcional, ayuda a detectar vacíos)</label>
+            <input
+              type="text"
+              id="topicInput"
+              placeholder="Ej: Redes neuronales para diagnóstico médico, Derecho ambiental, etc."
+              class="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 placeholder-slate-500"
+            />
+          </div>
+
+          <div class="md:col-span-5">
+            <label class="block text-xs font-medium text-slate-300 mb-1 flex justify-between">
+              <span>Muestreo de referencias a verificar en la web</span>
+              <span id="sampleVal" class="text-indigo-400 font-semibold">8</span>
+            </label>
+            <input
+              type="range"
+              id="sampleInput"
+              min="5"
+              max="10"
+              value="8"
+              class="w-full h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-indigo-500 mt-3"
+            />
+          </div>
+
+          <div class="md:col-span-12 flex justify-end pt-1">
+            <button
+              type="submit"
+              id="btnSubmit"
+              class="flex items-center gap-2 px-6 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-medium rounded-xl text-sm transition-all shadow-lg shadow-indigo-600/30 active:scale-95 disabled:opacity-50 disabled:pointer-events-none"
+            >
+              <span>▶</span>
+              <span>Auditar Tesis con Agentes</span>
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- PIPELINE TRACKER -->
+    <div id="pipelineTracker" class="hidden bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-4">
+      <div class="flex items-center justify-between gap-2">
+        <h3 class="text-sm font-semibold text-slate-300 flex items-center gap-2">
+          <span class="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-ping"></span>
+          <span>Pipeline de Auditoría en Ejecución</span>
+        </h3>
+        <span id="pipelineStatusText" class="text-xs text-cyan-400 font-mono truncate">Iniciando...</span>
+      </div>
+
+      <div class="grid grid-cols-1 sm:grid-cols-4 gap-3 text-xs">
+        <div id="step-pdf_parser" class="p-3 rounded-xl border border-slate-800 bg-slate-950/60 flex items-center gap-3">
+          <div class="w-7 h-7 rounded-lg bg-slate-800 flex items-center justify-center text-slate-400 font-bold step-icon">1</div>
+          <div>
+            <p class="font-medium text-slate-300">Extractor PDF</p>
+            <p class="text-[10px] text-slate-500 step-desc">Esperando</p>
+          </div>
+        </div>
+
+        <div id="step-verifier" class="p-3 rounded-xl border border-slate-800 bg-slate-950/60 flex items-center gap-3">
+          <div class="w-7 h-7 rounded-lg bg-slate-800 flex items-center justify-center text-slate-400 font-bold step-icon">2</div>
+          <div>
+            <p class="font-medium text-slate-300">Verificador Web</p>
+            <p class="text-[10px] text-slate-500 step-desc">Esperando</p>
+          </div>
+        </div>
+
+        <div id="step-evaluator" class="p-3 rounded-xl border border-slate-800 bg-slate-950/60 flex items-center gap-3">
+          <div class="w-7 h-7 rounded-lg bg-slate-800 flex items-center justify-center text-slate-400 font-bold step-icon">3</div>
+          <div>
+            <p class="font-medium text-slate-300">Tutor Gemini 3.6</p>
+            <p class="text-[10px] text-slate-500 step-desc">Esperando</p>
+          </div>
+        </div>
+
+        <div id="step-reporter" class="p-3 rounded-xl border border-slate-800 bg-slate-950/60 flex items-center gap-3">
+          <div class="w-7 h-7 rounded-lg bg-slate-800 flex items-center justify-center text-slate-400 font-bold step-icon">4</div>
+          <div>
+            <p class="font-medium text-slate-300">Informe Final</p>
+            <p class="text-[10px] text-slate-500 step-desc">Esperando</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- RESULTS DASHBOARD -->
+    <div id="resultsSection" class="hidden space-y-8">
+
+      <!-- EXECUTIVE SUMMARY BANNER -->
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 flex flex-col md:flex-row md:items-center justify-between gap-6">
+        <div class="space-y-2 max-w-3xl">
+          <div class="flex flex-wrap items-center gap-2">
+            <span id="overallVerdictBadge" class="px-3 py-1 rounded-full text-xs font-bold bg-indigo-950 border border-indigo-700 text-indigo-300">Veredicto</span>
+            <span id="thesisMetaBadge" class="text-xs text-slate-400 font-mono">0 págs · Norma APA</span>
+          </div>
+          <h2 id="thesisTitleHeading" class="text-lg font-bold text-white">Título de la tesis</h2>
+          <p id="executiveSummaryText" class="text-sm text-slate-300 leading-relaxed"></p>
+        </div>
+
+        <div class="flex flex-col items-center justify-center bg-slate-950 border border-slate-800 rounded-2xl px-6 py-4 shrink-0">
+          <span class="text-[11px] uppercase tracking-wider text-slate-400 font-semibold">Puntaje Global</span>
+          <p id="overallScoreText" class="text-4xl font-black text-indigo-400 mt-1">0.0</p>
+          <span class="text-xs text-slate-500">sobre 10</span>
+        </div>
+      </div>
+
+      <!-- KPI CARDS & CHARTS -->
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        <div class="lg:col-span-5 grid grid-cols-2 gap-4">
+          <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+            <span class="text-xs text-slate-400">Referencias Totales</span>
+            <p id="kpiTotalBib" class="text-3xl font-extrabold text-white mt-1">0</p>
+            <span id="kpiStyle" class="text-[11px] text-slate-500">Norma: -</span>
+          </div>
+
+          <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+            <span class="text-xs text-slate-400">Últimos 5 Años</span>
+            <p id="kpiPct5Y" class="text-3xl font-extrabold text-cyan-400 mt-1">0%</p>
+            <span id="kpiCount5Y" class="text-[11px] text-slate-500">0 referencias recientes</span>
+          </div>
+
+          <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+            <span class="text-xs text-slate-400">Coherencia Citas ↔ Lista</span>
+            <p id="kpiCoherence" class="text-3xl font-extrabold text-emerald-400 mt-1">0%</p>
+            <span id="kpiInTextCount" class="text-[11px] text-slate-500">0 citas en cuerpo</span>
+          </div>
+
+          <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+            <span class="text-xs text-slate-400">Muestreo Verificado</span>
+            <p id="kpiVerified" class="text-3xl font-extrabold text-amber-400 mt-1">0/0</p>
+            <span id="kpiSuspect" class="text-[11px] text-slate-500">0 sospechosas</span>
+          </div>
+        </div>
+
+        <div class="lg:col-span-4 bg-slate-900 border border-slate-800 rounded-2xl p-4 flex flex-col">
+          <span class="text-xs text-slate-400 font-medium mb-2">Distribución Temporal</span>
+          <div class="h-44 relative flex-1">
+            <canvas id="temporalChart"></canvas>
+          </div>
+        </div>
+
+        <div class="lg:col-span-3 bg-slate-900 border border-slate-800 rounded-2xl p-4 flex flex-col items-center">
+          <span class="text-xs text-slate-400 font-medium mb-2">Jerarquía de Fuentes</span>
+          <div class="w-40 h-40 relative">
+            <canvas id="hierarchyChart"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <!-- EXPORT BUTTONS -->
+      <div class="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-slate-800">
+        <h3 class="text-base font-bold text-white">📋 Evaluación por los 6 Criterios del Tutor</h3>
+        <div class="flex items-center gap-2">
+          <button id="btnExportMd" class="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-700 rounded-xl text-xs text-slate-200 transition-colors">
+            <span>📄</span><span>Exportar Informe Markdown</span>
+          </button>
+          <button id="btnExportJson" class="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-700 rounded-xl text-xs text-slate-200 transition-colors">
+            <span>💾</span><span>Exportar JSON</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- 6 PILLARS GRID -->
+      <div id="pillarsGrid" class="grid grid-cols-1 md:grid-cols-2 gap-5"></div>
+
+      <!-- CITATION CROSS-CHECK & CONCENTRATION -->
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
+          <h3 class="text-sm font-bold text-white flex items-center gap-2">
+            <span>🔗</span> Cruce de Integridad: Citas en el Texto vs. Lista Final
+          </h3>
+          <div id="crossCheckContainer" class="space-y-3 text-xs"></div>
+        </div>
+
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
+          <h3 class="text-sm font-bold text-white flex items-center gap-2">
+            <span>📚</span> Vacíos Detectados y Dependencia de Autores
+          </h3>
+          <div id="gapsAndAuthorsContainer" class="space-y-3 text-xs"></div>
+        </div>
+      </div>
+
+      <!-- VERIFIED REFERENCES TABLE / CARDS -->
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <h3 class="text-sm font-bold text-white flex items-center gap-2">
+            <span>🔎</span> Muestreo de Referencias Verificadas (Crossref · OpenAlex · Web · Crawl4AI)
+          </h3>
+          <span class="text-xs text-slate-400">Comprueba existencia real y si respalda lo que afirma la tesis</span>
+        </div>
+        <div id="verifiedRefsList" class="space-y-3"></div>
+      </div>
+
+      <!-- TUTORING QUESTIONS & FEEDBACK -->
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div class="bg-slate-900 border border-indigo-900/50 rounded-2xl p-5 space-y-3">
+          <h3 class="text-sm font-bold text-indigo-300 flex items-center gap-2">
+            <span>💬</span> Preguntas para la Reunión de Tutoría
+          </h3>
+          <ul id="tutoringQuestionsList" class="space-y-2 text-xs text-slate-200 list-disc pl-4"></ul>
+        </div>
+
+        <div class="bg-slate-900 border border-emerald-900/40 rounded-2xl p-5 space-y-3">
+          <h3 class="text-sm font-bold text-emerald-300 flex items-center gap-2">
+            <span>✍️</span> Devolución Concreta para el Tesista
+          </h3>
+          <ul id="studentFeedbackList" class="space-y-2 text-xs text-slate-200 list-disc pl-4"></ul>
+        </div>
+      </div>
+
+    </div>
+  </main>
+
+  <footer class="border-t border-slate-900 bg-slate-950 py-6 text-center text-xs text-slate-600">
+    <p>Analista de Tesis Full-Stack • LangGraph • Crossref & OpenAlex • Crawl4AI + Playwright • Gemini 3.6 con Rotación de Claves • Astro.js</p>
+  </footer>
+</Layout>
+
+<script is:inline>
+  const uploadForm = document.getElementById("uploadForm");
+  const pdfInput = document.getElementById("pdfInput");
+  const dropZone = document.getElementById("dropZone");
+  const fileLabel = document.getElementById("fileLabel");
+  const topicInput = document.getElementById("topicInput");
+  const sampleInput = document.getElementById("sampleInput");
+  const sampleVal = document.getElementById("sampleVal");
+  const btnSubmit = document.getElementById("btnSubmit");
+  const llmStatusBadge = document.getElementById("llmStatusBadge");
+
+  const pipelineTracker = document.getElementById("pipelineTracker");
+  const pipelineStatusText = document.getElementById("pipelineStatusText");
+  const resultsSection = document.getElementById("resultsSection");
+
+  let fullResultData = null;
+  let temporalChartInstance = null;
+  let hierarchyChartInstance = null;
+
+  function escapeHtml(str) {
+    return String(str ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
+  sampleInput.addEventListener("input", (e) => {
+    sampleVal.textContent = e.target.value;
+  });
+
+  pdfInput.addEventListener("change", () => {
+    if (pdfInput.files && pdfInput.files[0]) {
+      const f = pdfInput.files[0];
+      fileLabel.textContent = `Seleccionado: ${f.name} (${(f.size / (1024 * 1024)).toFixed(2)} MB)`;
+    }
+  });
+
+  ["dragover", "dragleave", "drop"].forEach((evtName) => {
+    dropZone.addEventListener(evtName, (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (evtName === "dragover") {
+        dropZone.classList.add("border-indigo-400", "bg-indigo-950/20");
+      } else {
+        dropZone.classList.remove("border-indigo-400", "bg-indigo-950/20");
+      }
+      if (evtName === "drop" && e.dataTransfer.files && e.dataTransfer.files[0]) {
+        pdfInput.files = e.dataTransfer.files;
+        const f = e.dataTransfer.files[0];
+        fileLabel.textContent = `Seleccionado: ${f.name} (${(f.size / (1024 * 1024)).toFixed(2)} MB)`;
+      }
+    });
+  });
+
+  async function checkBackendConfig(retries = 8) {
+    try {
+      const res = await fetch("/api/config");
+      if (!res.ok) throw new Error("Backend offline");
+      const data = await res.json();
+      if (data.gemini_configured) {
+        const ks = data.gemini_key_status || {};
+        llmStatusBadge.className = "flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium bg-emerald-950/60 border border-emerald-800 text-emerald-300";
+        llmStatusBadge.innerHTML = `<span class="w-2 h-2 rounded-full bg-emerald-400"></span><span>Gemini (${escapeHtml(data.model)}) · ${ks.active_keys || data.gemini_keys_count} keys en rotación</span>`;
+      } else {
+        llmStatusBadge.className = "flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium bg-amber-950/60 border border-amber-800 text-amber-300";
+        llmStatusBadge.innerHTML = `<span class="w-2 h-2 rounded-full bg-amber-400"></span><span>Modo Heurístico (Sin API Key)</span>`;
+      }
+    } catch {
+      if (retries > 0) {
+        setTimeout(() => checkBackendConfig(retries - 1), 1500);
+      } else {
+        llmStatusBadge.className = "flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium bg-rose-950/60 border border-rose-800 text-rose-300";
+        llmStatusBadge.innerHTML = `<span class="w-2 h-2 rounded-full bg-rose-400"></span><span>Backend no responde (:8000)</span>`;
+      }
+    }
+  }
+  checkBackendConfig();
+
+  function updateStep(stepId, state, descText) {
+    const el = document.getElementById(`step-${stepId}`);
+    if (!el) return;
+    const icon = el.querySelector(".step-icon");
+    const desc = el.querySelector(".step-desc");
+    if (state === "active") {
+      el.className = "p-3 rounded-xl border border-indigo-500/60 bg-indigo-950/30 flex items-center gap-3 animate-pulse";
+      icon.className = "w-7 h-7 rounded-lg bg-indigo-600 text-white font-bold flex items-center justify-center step-icon";
+    } else if (state === "done") {
+      el.className = "p-3 rounded-xl border border-emerald-500/40 bg-emerald-950/20 flex items-center gap-3";
+      icon.className = "w-7 h-7 rounded-lg bg-emerald-600 text-white font-bold flex items-center justify-center step-icon";
+      icon.textContent = "✓";
+    }
+    if (descText) desc.textContent = descText;
+  }
+
+  function resetPipeline() {
+    ["pdf_parser", "verifier", "evaluator", "reporter"].forEach((s, idx) => {
+      const el = document.getElementById(`step-${s}`);
+      const icon = el.querySelector(".step-icon");
+      const desc = el.querySelector(".step-desc");
+      el.className = "p-3 rounded-xl border border-slate-800 bg-slate-950/60 flex items-center gap-3";
+      icon.className = "w-7 h-7 rounded-lg bg-slate-800 flex items-center justify-center text-slate-400 font-bold step-icon";
+      icon.textContent = String(idx + 1);
+      desc.textContent = "Esperando";
+    });
+  }
+
+  uploadForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (!pdfInput.files || !pdfInput.files[0]) {
+      alert("Selecciona un archivo PDF primero.");
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append("file", pdfInput.files[0]);
+    formData.append("thesis_topic", topicInput.value.trim());
+    formData.append("sample_size", sampleInput.value);
+
+    btnSubmit.disabled = true;
+    pipelineTracker.classList.remove("hidden");
+    resultsSection.classList.add("hidden");
+    resetPipeline();
+    pipelineStatusText.textContent = "Subiendo PDF...";
+
+    try {
+      const response = await fetch("/api/analyze/stream", {
+        method: "POST",
+        body: formData,
+      });
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData.detail || `HTTP ${response.status}`);
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const events = buffer.split("\n\n");
+        buffer = events.pop() || "";
+
+        for (const rawEvt of events) {
+          const line = rawEvt.split("\n").find((l) => l.startsWith("data: "));
+          if (!line) continue;
+          const data = JSON.parse(line.slice(6));
+          const { step, message, payload } = data;
+          pipelineStatusText.textContent = message;
+
+          if (step === "pdf_parser") updateStep("pdf_parser", "active", "Leyendo PDF...");
+          else if (step === "pdf_parser_done") updateStep("pdf_parser", "done", `${payload.bibliography_count} refs`);
+          else if (step === "verifier") updateStep("verifier", "active", "Consultando APIs...");
+          else if (step === "verifier_done") updateStep("verifier", "done", `${payload.verified}/${payload.sampled} ok`);
+          else if (step === "evaluator") updateStep("evaluator", "active", "Auditando...");
+          else if (step === "evaluator_done") updateStep("evaluator", "done", "Evaluado");
+          else if (step === "reporter") updateStep("reporter", "active", "Generando...");
+          else if (step === "completed") {
+            updateStep("reporter", "done", "Listo");
+            fullResultData = payload;
+            renderDashboard(payload);
+          } else if (step === "error") {
+            throw new Error(message);
+          }
+        }
+      }
+    } catch (err) {
+      alert("Error al analizar la tesis: " + err.message);
+    } finally {
+      btnSubmit.disabled = false;
+      checkBackendConfig(0);
+    }
+  });
+
+  function renderDashboard(data) {
+    resultsSection.classList.remove("hidden");
+    const parsed = data.parsed_thesis || {};
+    const analytics = parsed.analytics || {};
+    const temporal = analytics.temporal || {};
+    const hierarchy = analytics.hierarchy || {};
+    const cross = parsed.cross_check || {};
+    const verification = data.verification_results || {};
+    const ev = data.evaluation || {};
+
+    document.getElementById("thesisTitleHeading").textContent = parsed.title_guess || data.filename;
+    document.getElementById("thesisMetaBadge").textContent = `${parsed.page_count || 0} págs · Norma ${cross.detected_style || "Desconocida"} · Archivo: ${data.filename}`;
+    document.getElementById("overallVerdictBadge").textContent = ev.overall_verdict || "Evaluado";
+    document.getElementById("executiveSummaryText").textContent = ev.executive_summary || "";
+    document.getElementById("overallScoreText").textContent = Number(ev.overall_score || 0).toFixed(1);
+
+    document.getElementById("kpiTotalBib").textContent = cross.total_bibliography ?? 0;
+    document.getElementById("kpiStyle").textContent = `Norma: ${cross.detected_style || "Desconocida"}`;
+    document.getElementById("kpiPct5Y").textContent = `${temporal.pct_last_5_years ?? 0}%`;
+    document.getElementById("kpiCount5Y").textContent = `${temporal.last_5_years ?? 0} referencias recientes`;
+    document.getElementById("kpiCoherence").textContent = `${cross.coherence_score ?? 0}%`;
+    document.getElementById("kpiInTextCount").textContent = `${cross.total_in_text_citations ?? 0} citas en el cuerpo`;
+    document.getElementById("kpiVerified").textContent = `${verification.verified_count ?? 0}/${verification.sampled_count ?? 0}`;
+    document.getElementById("kpiSuspect").textContent = `${verification.suspect_or_missing_count ?? 0} sospechosas/no halladas`;
+
+    renderCharts(temporal, hierarchy);
+    renderPillars(ev);
+    renderCrossCheck(cross, analytics);
+    renderGapsAndAuthors(ev, analytics);
+    renderVerifiedReferences(verification.verified_references || [], ev.sampled_reference_reviews || []);
+    renderLists(ev);
+  }
+
+  function renderCharts(temporal, hierarchy) {
+    const tCtx = document.getElementById("temporalChart").getContext("2d");
+    if (temporalChartInstance) temporalChartInstance.destroy();
+    temporalChartInstance = new Chart(tCtx, {
+      type: "bar",
+      data: {
+        labels: ["Últimos 5 años", "6-10 años", ">10 años", "Sin año"],
+        datasets: [{
+          data: [
+            temporal.last_5_years || 0,
+            temporal.years_6_to_10 || 0,
+            temporal.older_than_10 || 0,
+            temporal.no_year || 0,
+          ],
+          backgroundColor: ["#22d3ee", "#818cf8", "#64748b", "#f43f5e"],
+          borderRadius: 6,
+        }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { ticks: { color: "#94a3b8", font: { size: 10 } }, grid: { display: false } },
+          y: { ticks: { color: "#94a3b8", precision: 0 }, grid: { color: "#1e293b" } },
+        },
+      },
+    });
+
+    const hCtx = document.getElementById("hierarchyChart").getContext("2d");
+    if (hierarchyChartInstance) hierarchyChartInstance.destroy();
+    hierarchyChartInstance = new Chart(hCtx, {
+      type: "doughnut",
+      data: {
+        labels: ["Papers", "Normas/Data", "Libros/Manuales", "Web/Wiki", "Otras"],
+        datasets: [{
+          data: [
+            hierarchy.primaria_paper || 0,
+            hierarchy.primaria_norma_dataset || 0,
+            hierarchy.secundaria_libro_manual || 0,
+            hierarchy.web_blog_wiki || 0,
+            hierarchy.otra || 0,
+          ],
+          backgroundColor: ["#10b981", "#06b6d4", "#6366f1", "#f43f5e", "#475569"],
+          borderWidth: 0,
+        }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        cutout: "65%",
+      },
+    });
+  }
+
+  function renderPillars(ev) {
+    const grid = document.getElementById("pillarsGrid");
+    const defs = [
+      ["1. Dominio del Campo", ev.dominio_del_campo],
+      ["2. Calidad y Jerarquía de Fuentes", ev.calidad_y_jerarquia],
+      ["3. Actualidad y Pertinencia", ev.actualidad_y_pertinencia],
+      ["4. Uso Real de las Fuentes", ev.uso_real_de_fuentes],
+      ["5. Integridad Académica", ev.integridad_academica],
+      ["6. Aspectos Formales", ev.aspectos_formales],
+    ];
+
+    grid.innerHTML = defs.map(([title, p]) => {
+      if (!p) return "";
+      const score = Number(p.score || 0);
+      const badgeColor = score >= 8 ? "bg-emerald-950 border-emerald-700 text-emerald-300" :
+        (score >= 6 ? "bg-cyan-950 border-cyan-700 text-cyan-300" :
+        (score >= 4 ? "bg-amber-950 border-amber-700 text-amber-300" : "bg-rose-950 border-rose-700 text-rose-300"));
+      return `
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-3">
+          <div class="flex items-center justify-between gap-2">
+            <h4 class="text-sm font-bold text-white">${escapeHtml(title)}</h4>
+            <span class="px-2.5 py-0.5 rounded-full border text-xs font-bold ${badgeColor}">${score.toFixed(1)}/10 · ${escapeHtml(p.verdict)}</span>
+          </div>
+          <p class="text-xs text-slate-300 leading-relaxed">${escapeHtml(p.summary)}</p>
+          ${(p.strengths && p.strengths.length) ? `
+            <div>
+              <span class="text-[11px] font-semibold text-emerald-400">Fortalezas:</span>
+              <ul class="text-[11px] text-slate-300 list-disc pl-4 mt-1 space-y-0.5">
+                ${p.strengths.map((s) => `<li>${escapeHtml(s)}</li>`).join("")}
+              </ul>
+            </div>` : ""}
+          ${(p.findings && p.findings.length) ? `
+            <div>
+              <span class="text-[11px] font-semibold text-amber-400">Hallazgos / Alertas:</span>
+              <ul class="text-[11px] text-slate-300 list-disc pl-4 mt-1 space-y-0.5">
+                ${p.findings.map((f) => `<li>${escapeHtml(f)}</li>`).join("")}
+              </ul>
+            </div>` : ""}
+          ${(p.concrete_recommendations && p.concrete_recommendations.length) ? `
+            <div>
+              <span class="text-[11px] font-semibold text-indigo-400">Recomendaciones:</span>
+              <ul class="text-[11px] text-slate-300 list-disc pl-4 mt-1 space-y-0.5">
+                ${p.concrete_recommendations.map((r) => `<li>${escapeHtml(r)}</li>`).join("")}
+              </ul>
+            </div>` : ""}
+        </div>
+      `;
+    }).join("");
+  }
+
+  function renderCrossCheck(cross, analytics) {
+    const el = document.getElementById("crossCheckContainer");
+    const citedNotListed = cross.cited_but_not_listed || [];
+    const listedNotCited = cross.listed_but_not_cited || [];
+
+    el.innerHTML = `
+      <div class="bg-slate-950/70 border border-slate-800 rounded-xl p-3">
+        <p class="font-semibold text-rose-300 mb-1">Citadas en el texto que NO figuran en la bibliografía (${citedNotListed.length})</p>
+        ${citedNotListed.length
+          ? `<ul class="list-disc pl-4 text-slate-300 space-y-0.5 max-h-36 overflow-y-auto">${citedNotListed.map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul>`
+          : `<p class="text-emerald-400">Sin discrepancias detectadas.</p>`}
+      </div>
+      <div class="bg-slate-950/70 border border-slate-800 rounded-xl p-3">
+        <p class="font-semibold text-amber-300 mb-1">Listadas en bibliografía que NO se citaron en el texto (${listedNotCited.length})</p>
+        ${listedNotCited.length
+          ? `<ul class="list-disc pl-4 text-slate-300 space-y-0.5 max-h-36 overflow-y-auto">${listedNotCited.map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul>`
+          : `<p class="text-emerald-400">Todas las referencias listadas fueron citadas.</p>`}
+      </div>
+      <p class="text-[11px] text-slate-400">Entradas con posibles datos formales incompletos: <strong class="text-white">${analytics.formal_issues_count ?? 0}</strong></p>
+    `;
+  }
+
+  function renderGapsAndAuthors(ev, analytics) {
+    const el = document.getElementById("gapsAndAuthorsContainer");
+    const gaps = ev.missing_literature_suggestions || [];
+    const authors = analytics.top_authors || [];
+
+    el.innerHTML = `
+      <div class="bg-slate-950/70 border border-slate-800 rounded-xl p-3">
+        <p class="font-semibold text-cyan-300 mb-1">Vacíos / Literatura faltante sugerida</p>
+        ${gaps.length
+          ? `<ul class="list-disc pl-4 text-slate-300 space-y-1">${gaps.map((g) => `<li>${escapeHtml(g)}</li>`).join("")}</ul>`
+          : `<p class="text-slate-400">Sin vacíos críticos reportados.</p>`}
+      </div>
+      <div class="bg-slate-950/70 border border-slate-800 rounded-xl p-3">
+        <p class="font-semibold text-slate-200 mb-1.5">Autores más repetidos en la bibliografía</p>
+        <div class="flex flex-wrap gap-1.5">
+          ${authors.length
+            ? authors.map((a) => `<span class="px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-200">${escapeHtml(a.author)} (${a.count}x)</span>`).join("")
+            : `<span class="text-slate-500">No detectados</span>`}
+        </div>
+      </div>
+    `;
+  }
+
+  function renderVerifiedReferences(refs, reviews) {
+    const el = document.getElementById("verifiedRefsList");
+    if (!refs.length) {
+      el.innerHTML = `<p class="text-xs text-slate-400">No se pudieron extraer referencias para muestreo.</p>`;
+      return;
+    }
+
+    el.innerHTML = refs.map((r, idx) => {
+      const review = reviews[idx];
+      const st = r.status || "NO_ENCONTRADA";
+      const stClass = st === "VERIFICADA" ? "bg-emerald-950 border-emerald-700 text-emerald-300" :
+        (st === "PARCIAL" ? "bg-amber-950 border-amber-700 text-amber-300" : "bg-rose-950 border-rose-700 text-rose-300");
+
+      return `
+        <div class="bg-slate-950/70 border border-slate-800 rounded-xl p-4 space-y-2 text-xs">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="px-2.5 py-0.5 rounded-full border font-bold ${stClass}">${escapeHtml(st)}</span>
+              <span class="px-2 py-0.5 rounded bg-slate-800 text-cyan-300 font-medium">${escapeHtml(r.verification_source)}</span>
+              ${review ? `<span class="px-2 py-0.5 rounded bg-indigo-950 border border-indigo-800 text-indigo-300">${escapeHtml(review.existence_verdict)}</span>` : ""}
+            </div>
+            ${r.matched_url ? `<a href="${escapeHtml(r.matched_url)}" target="_blank" rel="noopener noreferrer" class="text-blue-400 hover:text-blue-300 font-medium">Ver fuente ↗</a>` : ""}
+          </div>
+          <p class="text-slate-200 font-semibold">${escapeHtml(r.reference_text)}</p>
+          ${r.matched_title ? `<p class="text-slate-400"><strong>Coincidencia hallada:</strong> ${escapeHtml(r.matched_title)} (${escapeHtml(r.matched_year || "s/f")}) — ${escapeHtml(r.matched_authors)}</p>` : ""}
+          ${r.thesis_claim_context ? `<p class="text-slate-400"><strong>Uso en la tesis:</strong> "${escapeHtml(r.thesis_claim_context.slice(0, 260))}"</p>` : ""}
+          <p class="text-slate-300"><strong>Dictamen:</strong> ${escapeHtml(review ? review.claim_alignment : r.alignment_notes)}</p>
+        </div>
+      `;
+    }).join("");
+  }
+
+  function renderLists(ev) {
+    const qEl = document.getElementById("tutoringQuestionsList");
+    const fEl = document.getElementById("studentFeedbackList");
+    qEl.innerHTML = (ev.tutoring_questions || []).map((q) => `<li>${escapeHtml(q)}</li>`).join("");
+    fEl.innerHTML = (ev.actionable_feedback_for_student || []).map((f) => `<li>${escapeHtml(f)}</li>`).join("");
+  }
+
+  document.getElementById("btnExportMd").addEventListener("click", () => {
+    if (!fullResultData || !fullResultData.summary_report) return;
+    const blob = new Blob([fullResultData.summary_report], { type: "text/markdown" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `auditoria_tesis_${Date.now()}.md`;
+    a.click();
+  });
+
+  document.getElementById("btnExportJson").addEventListener("click", () => {
+    if (!fullResultData) return;
+    const blob = new Blob([JSON.stringify(fullResultData, null, 2)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `auditoria_tesis_${Date.now()}.json`;
+    a.click();
+  });
+</script>
+
