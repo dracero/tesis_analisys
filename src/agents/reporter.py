@@ -39,7 +39,8 @@ def generate_thesis_markdown_report(
     if parsed.get("low_text_warning"):
         lines.append("- ⚠️ **Advertencia:** El PDF tiene muy poco texto extraíble por página (posible documento escaneado sin OCR).")
     if analytics.get("duplicate_entries"):
-        lines.append(f"- ⚠️ **Posibles duplicados en bibliografía:** {len(analytics['duplicate_entries'])}")
+        dups = analytics["duplicate_entries"]
+        lines.append(f"- ⚠️ **Posibles duplicados en bibliografía ({len(dups)}):** " + "; ".join(dups[:5]))
     if bulk.get("checked_entries"):
         lines.append(
             f"- **Chequeo en lote ({bulk['checked_entries']} refs con DOI/URL):** "
@@ -47,6 +48,12 @@ def generate_thesis_markdown_report(
             f"URLs rotas: {len(bulk.get('broken_urls', []))} | "
             f"Retractados: {len(bulk.get('retracted_papers', []))}"
         )
+        if bulk.get("retracted_papers"):
+            lines.append("  - 🚨 **Retractados:** " + "; ".join(bulk["retracted_papers"][:5]))
+        if bulk.get("invalid_dois"):
+            lines.append("  - ❌ **DOIs inválidos:** " + "; ".join(bulk["invalid_dois"][:5]))
+        if bulk.get("broken_urls"):
+            lines.append("  - 🔗 **URLs rotas:** " + "; ".join(bulk["broken_urls"][:5]))
     lines.extend([
         "",
         "---",

@@ -332,17 +332,21 @@ def _cross_check_citations(
             elif part.isdigit():
                 ieee_tokens.append(int(part))
 
-    # Detectar citas APA: (Autor, 2021), (Autor & Autor, 2021), Autor (2021)
+    # Detectar citas APA: (Autor, 2021), (Autor1, 2020; Autor2, 2021), Autor (2021)
     apa_citations: List[Tuple[str, int, int, int]] = []
-    apa_paren_re = re.compile(
-        r"\(([A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ\-']{1,25}(?:\s+(?:et\s+al\.|y|&)\s+[A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ\-']{1,25})?),?\s*((?:19|20)\d{2}[a-z]?)\)"
+    apa_item_re = re.compile(
+        r"([A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ\-']{1,25}(?:\s+(?:et\s+al\.|y|&)\s+[A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ\-']{1,25})?),?\s*((?:19|20)\d{2}[a-z]?)"
     )
     apa_narr_re = re.compile(
         r"\b([A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ\-']{1,25})\s*(?:et\s+al\.)?\s*\(((?:19|20)\d{2}[a-z]?)\)"
     )
-    for m in apa_paren_re.finditer(body_text):
-        yr = int(m.group(2)[:4])
-        apa_citations.append((m.group(1).split()[0].rstrip(","), yr, m.start(), m.end()))
+    for paren_m in re.finditer(r"\(([^()]{5,300})\)", body_text):
+        inner = paren_m.group(1)
+        if not re.search(r"(?:19|20)\d{2}", inner):
+            continue
+        for item_m in apa_item_re.finditer(inner):
+            yr = int(item_m.group(2)[:4])
+            apa_citations.append((item_m.group(1).split()[0].rstrip(","), yr, paren_m.start(), paren_m.end()))
     for m in apa_narr_re.finditer(body_text):
         yr = int(m.group(2)[:4])
         apa_citations.append((m.group(1), yr, m.start(), m.end()))

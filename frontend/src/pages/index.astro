@@ -631,6 +631,8 @@ import Header from '../components/Header.astro';
       const stClass = st === "VERIFICADA" ? "bg-emerald-950 border-emerald-700 text-emerald-300" :
         (st === "PARCIAL" ? "bg-amber-950 border-amber-700 text-amber-300" : "bg-rose-950 border-rose-700 text-rose-300");
 
+      const safeUrl = r.matched_url && /^https?:\/\//i.test(r.matched_url.trim()) ? r.matched_url.trim() : "";
+
       return `
         <div class="bg-slate-950/70 border border-slate-800 rounded-xl p-4 space-y-2 text-xs">
           <div class="flex flex-wrap items-center justify-between gap-2">
@@ -639,7 +641,7 @@ import Header from '../components/Header.astro';
               <span class="px-2 py-0.5 rounded bg-slate-800 text-cyan-300 font-medium">${escapeHtml(r.verification_source)}</span>
               ${review ? `<span class="px-2 py-0.5 rounded bg-indigo-950 border border-indigo-800 text-indigo-300">${escapeHtml(review.existence_verdict)}</span>` : ""}
             </div>
-            ${r.matched_url ? `<a href="${escapeHtml(r.matched_url)}" target="_blank" rel="noopener noreferrer" class="text-blue-400 hover:text-blue-300 font-medium">Ver fuente ↗</a>` : ""}
+            ${safeUrl ? `<a href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener noreferrer" class="text-blue-400 hover:text-blue-300 font-medium">Ver fuente ↗</a>` : ""}
           </div>
           <p class="text-slate-200 font-semibold">${escapeHtml(r.reference_text)}</p>
           ${r.matched_title ? `<p class="text-slate-400"><strong>Coincidencia hallada:</strong> ${escapeHtml(r.matched_title)} (${escapeHtml(r.matched_year || "s/f")}) — ${escapeHtml(r.matched_authors)}</p>` : ""}
@@ -660,19 +662,23 @@ import Header from '../components/Header.astro';
   document.getElementById("btnExportMd").addEventListener("click", () => {
     if (!fullResultData || !fullResultData.summary_report) return;
     const blob = new Blob([fullResultData.summary_report], { type: "text/markdown" });
+    const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
+    a.href = url;
     a.download = `auditoria_tesis_${Date.now()}.md`;
     a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   });
 
   document.getElementById("btnExportJson").addEventListener("click", () => {
     if (!fullResultData) return;
     const blob = new Blob([JSON.stringify(fullResultData, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
+    a.href = url;
     a.download = `auditoria_tesis_${Date.now()}.json`;
     a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   });
 </script>
 

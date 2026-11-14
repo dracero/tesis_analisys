@@ -5,6 +5,7 @@ import difflib
 import json
 import logging
 import re
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -20,15 +21,33 @@ from src.state import VerifiedReference, FieldLiteratureItem, GraphState
 logger = logging.getLogger(__name__)
 
 _HEADERS = {"User-Agent": "TesisAnalisys/1.0 (mailto:tutor@fi.uba.ar)"}
+_CRAWLER_GLOBAL_SEM: Optional[asyncio.Semaphore] = None
+
+
+def _get_crawler_global_semaphore() -> asyncio.Semaphore:
+    global _CRAWLER_GLOBAL_SEM
+    if _CRAWLER_GLOBAL_SEM is None:
+        _CRAWLER_GLOBAL_SEM = asyncio.Semaphore(2)
+    return _CRAWLER_GLOBAL_SEM
 
 
 def _http_get_json(url: str, timeout: int = 8) -> Optional[Dict[str, Any]]:
-    try:
-        req = urllib.request.Request(url, headers=_HEADERS)
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-    except Exception:
-        return None
+    for attempt in range(2):
+        try:
+            req = urllib.request.Request(url, headers=_HEADERS)
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            if e.code in (429, 503) and attempt == 0:
+                time.sleep(1.0)
+                continue
+            return None
+        except Exception:
+            if attempt == 0:
+                time.sleep(0.4)
+                continue
+            return None
+    return None
 
 
 def _reconstruct_openalex_abstract(inv_index: Optional[Dict[str, List[int]]]) -> str:
@@ -174,16 +193,30 @@ def _verify_single_reference(entry: Dict[str, Any]) -> VerifiedReference:
         year_match = (year is None or cr_year is None or abs(year - cr_year) <= 1)
 
         if doi or (sim >= 0.55 and author_match):
-            status = "VERIFICADA" if (year_match and (sim >= 0.45 or doi)) else "PARCIAL"
+            doi_title_mismatch = bool(doi and title and len(title) > 15 and sim < 0.35)
+            status = "VERIFICADA" if (year_match and not doi_title_mismatch and (sim >= 0.45 or doi)) else "PARCIAL"
             notes = "Coincide en Crossref."
             if cr_retracted:
                 status = "SOSPECHOSA"
                 notes = "ALERTA: Artículo marcado como RETRACTADO en Crossref."
+            elif doi_title_mismatch:
+                status = "SOSPECHOSA"
+                notes = f"El DOI existe en Crossref pero corresponde a otro título ('{cr_title[:80]}'). Posible error de DOI."
             elif not year_match:
                 notes = f"Título/autor encontrados en Crossref, pero el año difiere ({year} vs {cr_year})."
             elif not author_match:
                 status = "SOSPECHOSA"
                 notes = f"Título similar en Crossref pero autor distinto ({author} vs {cr_authors}). Posible error de atribución."
+
+            if not cr_abstract:
+                oa_extra = _query_openalex(doi or cr.get("DOI"), cr_title, author)
+                if oa_extra:
+                    cr_abstract = _reconstruct_openalex_abstract(oa_extra.get("abstract_inverted_index"))[:1000]
+                if not cr_abstract:
+                    s2_extra = _query_semantic_scholar(doi or cr.get("DOI"), cr_title, author)
+                    if s2_extra:
+                        cr_abstract = (s2_extra.get("abstract") or "").strip()[:1000]
+
             return VerifiedReference(
                 reference_text=raw,
                 first_author=author,
@@ -319,7 +352,7 @@ def _verify_single_reference(entry: Dict[str, Any]) -> VerifiedReference:
         matched_url=url or "",
         verification_source="Sin coincidencia",
         thesis_claim_context=claim_ctx,
-        alignment_notes="No se hallaron coincidencias en Crossref, OpenAlex ni DuckDuckGo. Verificar existencia real.",
+        alignment_notes="No se hallaron coincidencias en Crossref, OpenAlex, Semantic Scholar ni DuckDuckGo. Verificar existencia real.",
     )
 
 
@@ -336,16 +369,18 @@ def _is_valid_crawled_content(clean_md: str, ref: VerifiedReference) -> bool:
     low = clean_md.lower()
     if any(pat in low for pat in _BAD_PAGE_PATTERNS):
         return False
-    # Verificar alguna coincidencia mínima con palabras del título o autor si están disponibles
-    tokens = [w for w in re.findall(r"[a-záéíóúñ]{4,}", (ref.reference_text or "").lower())][:8]
+    tokens = [
+        w for w in re.findall(r"[a-záéíóúñ]{4,}", (ref.reference_text or "").lower())
+        if w not in _STOPWORDS
+    ][:8]
     if tokens and not any(t in low for t in tokens):
         return False
     return True
 
 
 async def _crawl_urls_for_evidence(refs: List[VerifiedReference]) -> None:
-    """Usa Crawl4AI + Playwright para extraer contenido/abstract de URLs que aún no tienen extracto."""
-    targets = [r for r in refs if (r.url or r.matched_url) and not r.abstract_or_excerpt][:8]
+    """Usa Crawl4AI + Playwright en paralelo (con límite de concurrencia) para URLs sin extracto."""
+    targets = [r for r in refs if (r.url or r.matched_url) and not r.abstract_or_excerpt][:10]
     if not targets:
         return
 
@@ -359,30 +394,36 @@ async def _crawl_urls_for_evidence(refs: List[VerifiedReference]) -> None:
         page_timeout=18000,
     )
 
-    try:
-        async with AsyncWebCrawler(config=browser_config) as crawler:
-            for ref in targets:
-                target_url = ref.url or ref.matched_url
-                try:
-                    res = await crawler.arun(url=target_url, config=run_config)
-                    status_code = getattr(res, "status_code", None)
-                    if status_code is not None and status_code >= 400:
+    sem = asyncio.Semaphore(4)
+
+    async def _crawl_one(crawler: AsyncWebCrawler, ref: VerifiedReference) -> None:
+        target_url = ref.url or ref.matched_url
+        async with sem:
+            try:
+                res = await crawler.arun(url=target_url, config=run_config)
+                status_code = getattr(res, "status_code", None)
+                if status_code is not None and status_code >= 400:
+                    if ref.status == "NO_ENCONTRADA":
+                        ref.alignment_notes = f"URL inaccesible (HTTP {status_code})."
+                    return
+                if res.success:
+                    md = res.markdown.raw_markdown if hasattr(res.markdown, "raw_markdown") else str(res.markdown)
+                    clean_md = " ".join(md.split())[:1000]
+                    if _is_valid_crawled_content(clean_md, ref):
+                        ref.abstract_or_excerpt = clean_md
                         if ref.status == "NO_ENCONTRADA":
-                            ref.alignment_notes = f"URL inaccesible (HTTP {status_code})."
-                        continue
-                    if res.success:
-                        md = res.markdown.raw_markdown if hasattr(res.markdown, "raw_markdown") else str(res.markdown)
-                        clean_md = " ".join(md.split())[:1000]
-                        if _is_valid_crawled_content(clean_md, ref):
-                            ref.abstract_or_excerpt = clean_md
-                            if ref.status == "NO_ENCONTRADA":
-                                ref.status = "VERIFICADA"
-                                ref.verification_source = "Crawl4AI (URL directa)"
-                                ref.alignment_notes = "Enlace accesible y contenido coincidente extraído vía Playwright."
-                        elif ref.status == "NO_ENCONTRADA":
-                            ref.alignment_notes = "URL respondió pero sin contenido válido o coincidente (posible 404/muro de acceso)."
-                except Exception as e:
-                    logger.debug(f"No se pudo crawlear {target_url}: {e}")
+                            ref.status = "VERIFICADA"
+                            ref.verification_source = "Crawl4AI (URL directa)"
+                            ref.alignment_notes = "Enlace accesible y contenido coincidente extraído vía Playwright."
+                    elif ref.status == "NO_ENCONTRADA":
+                        ref.alignment_notes = "URL respondió pero sin contenido válido o coincidente (posible 404/muro de acceso)."
+            except Exception as e:
+                logger.debug(f"No se pudo crawlear {target_url}: {e}")
+
+    try:
+        async with _get_crawler_global_semaphore():
+            async with AsyncWebCrawler(config=browser_config) as crawler:
+                await asyncio.gather(*(_crawl_one(crawler, ref) for ref in targets))
     except Exception as e:
         logger.warning(f"Crawl4AI omitido en verificación de URLs: {e}")
 
@@ -576,14 +617,15 @@ async def verify_references_and_field_async(parsed_thesis: Dict[str, Any], sampl
     topic = parsed_thesis.get("topic_hint") or parsed_thesis.get("title_guess") or "Investigación académica"
     sampled = select_sample_references(entries, sample_size=sample_size)
 
-    def _run_batch():
+    def _run_sampled():
         with ThreadPoolExecutor(max_workers=4) as ex:
-            verified = list(ex.map(_verify_single_reference, sampled))
-        field_lit = _search_field_literature(topic, entries=entries)
-        bulk_check = _verify_all_bibliography_light(entries)
-        return verified, field_lit, bulk_check
+            return list(ex.map(_verify_single_reference, sampled))
 
-    verified_refs, field_lit, bulk_check = await asyncio.to_thread(_run_batch)
+    verified_refs, field_lit, bulk_check = await asyncio.gather(
+        asyncio.to_thread(_run_sampled),
+        asyncio.to_thread(_search_field_literature, topic, entries),
+        asyncio.to_thread(_verify_all_bibliography_light, entries),
+    )
     await _crawl_urls_for_evidence(verified_refs)
 
     verified_count = sum(1 for r in verified_refs if r.status == "VERIFICADA")

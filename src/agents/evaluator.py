@@ -124,16 +124,41 @@ def _get_or_create_chain(model_name: str, api_key: str) -> Any:
     with _client_lock:
         chain = _chain_cache.get(cache_key)
         if chain is None:
+            if len(_chain_cache) >= 16:
+                _chain_cache.pop(next(iter(_chain_cache)))
             llm = ChatGoogleGenerativeAI(
                 model=model_name,
                 google_api_key=api_key,
                 temperature=0.15,
                 max_retries=0,
-                timeout=45,
+                timeout=90,
             )
             chain = EVALUATOR_PROMPT | llm.with_structured_output(ThesisEvaluation)
             _chain_cache[cache_key] = chain
         return chain
+
+
+def _serialize_list_bounded(items: List[Any], max_chars: int) -> str:
+    kept: List[Any] = []
+    for item in items:
+        candidate = json.dumps(kept + [item], ensure_ascii=False, indent=2)
+        if len(candidate) > max_chars and kept:
+            break
+        kept.append(item)
+    return json.dumps(kept, ensure_ascii=False, indent=2)
+
+
+def _serialize_dict_bounded(data: Dict[str, str], max_chars: int) -> str:
+    kept: Dict[str, str] = {}
+    for k, v in data.items():
+        candidate = json.dumps({**kept, k: v}, ensure_ascii=False, indent=2)
+        if len(candidate) > max_chars:
+            remaining = max_chars - len(json.dumps(kept, ensure_ascii=False, indent=2)) - len(k) - 20
+            if remaining > 200:
+                kept[k] = v[:remaining] + "..."
+            break
+        kept[k] = v
+    return json.dumps(kept, ensure_ascii=False, indent=2)
 
 
 def _heuristic_fallback_evaluation(parsed: Dict[str, Any], verification: Dict[str, Any]) -> ThesisEvaluation:
@@ -250,6 +275,9 @@ def evaluate_thesis(
         for i, e in enumerate(entries)
     ]
 
+    sections = parsed.get("sections_summary", {})
+    use_raw_excerpts = len(sections) < 2
+
     payload = {
         "filename": filename,
         "title_guess": parsed.get("title_guess", "Tesis"),
@@ -258,13 +286,13 @@ def evaluate_thesis(
         "analytics_json": json.dumps(parsed.get("analytics", {}), ensure_ascii=False, indent=2),
         "cross_check_json": json.dumps(parsed.get("cross_check", {}), ensure_ascii=False, indent=2),
         "bulk_check_json": json.dumps(verification.get("bulk_check_summary", {}), ensure_ascii=False, indent=2),
-        "full_bib_compact": "\n".join(compact_lines)[:8000] or "(Sin referencias)",
-        "verified_refs_json": json.dumps(verification.get("verified_references", []), ensure_ascii=False, indent=2)[:20000],
-        "field_lit_json": json.dumps(verification.get("field_literature", []), ensure_ascii=False, indent=2)[:6000],
-        "sections_json": json.dumps(parsed.get("sections_summary", {}), ensure_ascii=False, indent=2)[:14000],
-        "intro_excerpt": parsed.get("body_excerpt_intro", "")[:6500],
-        "mid_excerpt": parsed.get("body_excerpt_mid", "")[:4500],
-        "end_excerpt": parsed.get("body_excerpt_end", "")[:5500],
+        "full_bib_compact": "\n".join(compact_lines)[:12000] or "(Sin referencias)",
+        "verified_refs_json": _serialize_list_bounded(verification.get("verified_references", []), 20000),
+        "field_lit_json": _serialize_list_bounded(verification.get("field_literature", []), 6000),
+        "sections_json": _serialize_dict_bounded(sections, 16000),
+        "intro_excerpt": parsed.get("body_excerpt_intro", "")[:6500] if use_raw_excerpts else "(Omitido: cubierto por secciones detectadas)",
+        "mid_excerpt": parsed.get("body_excerpt_mid", "")[:4500] if use_raw_excerpts else "(Omitido: cubierto por secciones detectadas)",
+        "end_excerpt": parsed.get("body_excerpt_end", "")[:5500] if use_raw_excerpts else "(Omitido: cubierto por secciones detectadas)",
     }
 
     for key_idx, api_key in ordered_keys:
@@ -281,7 +309,11 @@ def evaluate_thesis(
             if _is_quota_error(err_msg):
                 rotator.report_rate_limit(api_key)
                 continue
-            logger.warning(f"Error con Gemini 3.6 y key #{key_idx} ({mask_key(api_key)}): {redact_keys(err_msg)}. Rotando clave...")
+            lowered = err_msg.lower()
+            if any(tok in lowered for tok in ("400", "invalid_argument", "validationerror", "context_length")):
+                logger.warning(f"Error determinístico de payload/esquema con Gemini ({redact_keys(err_msg)}); usando respaldo heurístico sin agotar claves.")
+                break
+            logger.warning(f"Error con {model_name} y key #{key_idx} ({mask_key(api_key)}): {redact_keys(err_msg)}. Rotando clave...")
             continue
 
     logger.warning("Todas las API keys fallaron durante la evaluación; usando respaldo heurístico.")

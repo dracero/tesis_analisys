@@ -49,19 +49,28 @@ MAX_PDF_BYTES = 50 * 1024 * 1024  # 50 MB
 async def _save_temp_pdf(file: UploadFile) -> str:
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="El archivo debe tener extensión .pdf")
-    content = await file.read()
-    if not content:
-        raise HTTPException(status_code=400, detail="El archivo PDF está vacío")
-    if len(content) > MAX_PDF_BYTES:
-        raise HTTPException(status_code=413, detail="El archivo supera el límite máximo de 50 MB")
-    if not content.startswith(b"%PDF"):
-        raise HTTPException(status_code=400, detail="El archivo subido no es un PDF válido")
 
     fd, tmp_path = tempfile.mkstemp(prefix="tesis_", suffix=".pdf")
-    os.close(fd)
-    with open(tmp_path, "wb") as f:
-        f.write(content)
-    return tmp_path
+    total_bytes = 0
+    first_chunk = True
+    try:
+        with os.fdopen(fd, "wb") as f:
+            while chunk := await file.read(65536):
+                if first_chunk:
+                    first_chunk = False
+                    if not chunk.startswith(b"%PDF"):
+                        raise HTTPException(status_code=400, detail="El archivo subido no es un PDF válido")
+                total_bytes += len(chunk)
+                if total_bytes > MAX_PDF_BYTES:
+                    raise HTTPException(status_code=413, detail="El archivo supera el límite máximo de 50 MB")
+                f.write(chunk)
+        if total_bytes == 0:
+            raise HTTPException(status_code=400, detail="El archivo PDF está vacío")
+        return tmp_path
+    except Exception:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        raise
 
 
 @app.get("/api/config")
@@ -150,11 +159,12 @@ async def _thesis_stream_generator(
             },
         )
 
-        # Paso 3: Evaluación de Tutor con Gemini 3.6 + rotación de API keys
+        # Paso 3: Evaluación de Tutor con Gemini + rotación de API keys
         key_status = get_key_rotator().get_status()
+        active_model = os.getenv("GEMINI_MODEL", "gemini-3.6-flash").strip() or "gemini-3.6-flash"
         yield send_event(
             "evaluator",
-            f"Evaluando los 6 criterios de tutoría con Gemini 3.6 ({key_status.get('active_keys', 0)} keys activas en rotación)...",
+            f"Evaluando los 6 criterios de tutoría con {active_model} ({key_status.get('active_keys', 0)} keys activas en rotación)...",
         )
         evaluation_model = await asyncio.to_thread(evaluate_thesis, filename, parsed, verification)
         evaluation = evaluation_model.model_dump()
