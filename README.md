@@ -112,3 +112,67 @@ uv run python main.py ruta/a/tesis.pdf --topic "Tema de la tesis" --sample-size 
 - `--topic`: Tema opcional para orientar la búsqueda bibliográfica (por defecto `""`, se infiere del PDF).
 - `--sample-size`: Cantidad de referencias clave a verificar (`5`–`10`, por defecto `8`).
 - `--output-md` / `--output-json`: Rutas opcionales para guardar el informe Markdown o el JSON completo. Usar `--help` para ver la ayuda en terminal.
+
+
+---
+
+## 🧪 Optimización del Evaluador con Harness² (`harness/`)
+
+El evaluador carga sus instrucciones, guardrails y rúbricas de forma modular desde `harness/` (`system_prompt.md`, `guardrails.md`, `tool_guidance.md`, `memory.md` y `skills/*.md`) con recarga en caliente por `mtime` y trazabilidad en `GET /api/config`.
+
+Cada PDF procesado por la web (`/api/analyze/stream`) o la API (`/api/analyze`) guarda automáticamente su fixture congelado en `harness_runs/fixtures/` (desactivable con `HARNESS_AUTO_CAPTURE=false`).
+
+### 1. Optimización en un solo comando (recomendado)
+
+```bash
+# Capturar un PDF (o una carpeta de PDFs) si aún no tiene fixture + optimizar + preguntar antes de promover
+npm run harness:optimize -- --pdf ruta/a/tesis.pdf --topic "Tema de la tesis"
+
+# Optimizar sobre los fixtures ya guardados (2 rondas) y promover automáticamente si gana el candidato
+npm run harness:optimize -- --rounds 2 --focus "reducir falsos positivos" --auto-promote
+
+# Forzar re-captura de fixtures existentes y limitar a 5 fixtures por ronda sin preguntar al final
+npm run harness:optimize -- --pdf carpeta_tesis/ --refresh --max-fixtures 5 --no-prompt
+
+# Revertir ./harness/ al último backup guardado (hot-reload inmediato en server.py)
+npm run harness:rollback
+```
+
+### 2. Flujo offline paso a paso (`harness2_offline.py`)
+
+```bash
+# Paso 1: Capturar fixture congelado (ejecuta pdf_parser + verifier una sola vez)
+npm run harness:capture -- ruta/a/tesis.pdf --topic "Tema de la tesis" --sample-size 8
+
+# Paso 2: Ejecutar un ciclo Propose -> Probe -> Compose aislado en harness_runs/ (sin modificar ./harness/)
+npm run harness:offline -- --max-fixtures 3 --focus "reducir falsos positivos en ausencias bibliográficas"
+```
+
+Los reportes comparativos con `diff` se guardan en `harness_runs/reports/<run_id>.md`, los backups en `harness_runs/backups/` y el historial en `harness_runs/improvement_ledger.jsonl`.
+
+### 3. Verificación puntual de una referencia (CLI sin MCP)
+
+```bash
+# Por título / cita textual (consulta OpenAlex)
+uv run python harness/scripts/verify_single_ref.py --query "Attention Is All You Need Vaswani 2017"
+
+# Por DOI exacto (consulta Crossref)
+uv run python harness/scripts/verify_single_ref.py --doi "10.1038/nature14539"
+```
+
+### Variables de entorno del Harness (opcionales)
+
+```bash
+HARNESS_DIR=./harness          # Directorio del harness modular activo
+HARNESS_AUTO_CAPTURE=true      # Guarda fixtures automáticamente al analizar PDFs en server.py
+```
+
+### 4. Endpoints Online del Harness (`server.py` + Panel Web)
+
+También podés operar todo el ciclo desde el panel **Harness² Online** en la interfaz web o directamente vía API REST mientras `server.py` está activo:
+
+- `GET /api/harness/status`: estado del harness activo (`harness_hash`), fixtures disponibles, backups, estado del job y últimas corridas.
+- `POST /api/harness/optimize`: lanza `Propose → Probe → Compose` en segundo plano (`{ "focus": "...", "rounds": 1, "max_fixtures": 3, "auto_promote": false }`).
+- `POST /api/harness/promote`: promueve un candidato ganador (`{ "run_id": "..." }`) a `./harness/` con backup previo y recarga en caliente.
+- `POST /api/harness/rollback`: restaura `./harness/` desde el último backup en `harness_runs/backups/`.
+- `POST /api/harness/verify-ref`: verifica una referencia puntual (`{ "query": "...", "doi": "..." }`) contra Crossref/OpenAlex.

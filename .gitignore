@@ -90,3 +90,6 @@ tesis_*.pdf
 .DS_Store
 Thumbs.db
 
+
+# Corridas offline de Harness² (fixtures, candidatos y reportes no promovidos)
+harness_runs/

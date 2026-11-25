@@ -249,6 +249,68 @@ import Header from '../components/Header.astro';
       </div>
 
     </div>
+
+    <!-- PANEL HARNESS² ONLINE -->
+    <section class="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-4">
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h3 class="text-sm font-bold text-amber-400 uppercase tracking-wider flex items-center gap-2">
+            <span>🧪</span> Harness² Online (Optimización, Promoción y Rollback)
+          </h3>
+          <p class="text-xs text-slate-400 mt-1">
+            Ejecuta <code>Propose → Probe → Compose</code> sobre los fixtures capturados, con backup automático y recarga en caliente.
+          </p>
+        </div>
+        <div class="flex items-center gap-2 text-xs">
+          <span id="harnessMetaBadge" class="px-2.5 py-1 rounded-lg bg-slate-950 border border-slate-700 font-mono text-slate-300">
+            Cargando harness...
+          </span>
+          <button
+            type="button"
+            id="btnHarnessRollback"
+            class="px-3 py-1.5 rounded-lg border border-rose-500/40 bg-rose-500/10 text-rose-300 hover:bg-rose-500/20 cursor-pointer"
+          >
+            Rollback
+          </button>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
+        <div class="md:col-span-6">
+          <label class="block text-xs text-slate-300 mb-1">Foco de optimización (opcional)</label>
+          <input
+            id="harnessFocusInput"
+            type="text"
+            placeholder="Ej: reducir falsos positivos en ausencias bibliográficas"
+            class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+          />
+        </div>
+        <div class="md:col-span-2">
+          <label class="block text-xs text-slate-300 mb-1">Rondas</label>
+          <select id="harnessRoundsInput" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white">
+            <option value="1">1 ronda</option>
+            <option value="2">2 rondas</option>
+            <option value="3">3 rondas</option>
+          </select>
+        </div>
+        <div class="md:col-span-2 flex items-center gap-2 pb-2">
+          <input id="harnessAutoPromote" type="checkbox" class="rounded border-slate-600 bg-slate-950 accent-amber-500" />
+          <label for="harnessAutoPromote" class="text-xs text-slate-300 cursor-pointer">Auto-promover</label>
+        </div>
+        <div class="md:col-span-2">
+          <button
+            type="button"
+            id="btnHarnessOptimize"
+            class="w-full px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-semibold cursor-pointer disabled:opacity-50"
+          >
+            Optimizar Online
+          </button>
+        </div>
+      </div>
+
+      <div id="harnessStatusMsg" class="hidden text-xs rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-slate-300"></div>
+      <div id="harnessRunsList" class="space-y-2 text-xs text-slate-400"></div>
+    </section>
   </main>
 
   <footer class="border-t border-slate-900 bg-slate-950 py-6 text-center text-xs text-slate-600">
@@ -680,5 +742,129 @@ import Header from '../components/Header.astro';
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   });
+
+  // --- HARNESS² ONLINE PANEL ---
+  let harnessPollTimer = null;
+
+  async function refreshHarnessStatus() {
+    const badge = document.getElementById("harnessMetaBadge");
+    const msgEl = document.getElementById("harnessStatusMsg");
+    const listEl = document.getElementById("harnessRunsList");
+    const btnOpt = document.getElementById("btnHarnessOptimize");
+    if (!badge || !listEl) return;
+
+    try {
+      const res = await fetch("/api/harness/status");
+      const data = await res.json();
+      badge.textContent = `hash: ${data.harness?.harness_hash || "?"} · fixtures: ${data.fixtures_count || 0} · backups: ${data.backups_count || 0}`;
+
+      const job = data.job || {};
+      if (job.state === "running") {
+        btnOpt.disabled = true;
+        msgEl.classList.remove("hidden");
+        msgEl.textContent = `Optimizando en curso... ronda ${job.rounds_completed}/${job.rounds_total}`;
+        if (!harnessPollTimer) {
+          harnessPollTimer = setInterval(refreshHarnessStatus, 4000);
+        }
+      } else {
+        btnOpt.disabled = false;
+        if (harnessPollTimer) {
+          clearInterval(harnessPollTimer);
+          harnessPollTimer = null;
+        }
+        if (job.state === "error" && job.error) {
+          msgEl.classList.remove("hidden");
+          msgEl.textContent = `Error en optimización: ${job.error}`;
+        } else if (job.state === "done") {
+          msgEl.classList.remove("hidden");
+          msgEl.textContent = `Optimización finalizada (${job.rounds_completed} ronda/s).`;
+        }
+      }
+
+      const runs = data.recent_runs || [];
+      if (runs.length === 0) {
+        listEl.innerHTML = `<div class="text-slate-500">Sin corridas registradas todavía.</div>`;
+        return;
+      }
+
+      listEl.innerHTML = runs.slice(0, 5).map((r) => `
+        <div class="rounded-xl border border-slate-800 bg-slate-950/80 p-3 flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <span class="font-mono text-amber-300">${r.run_id}</span>
+            <span class="ml-2 px-1.5 py-0.5 rounded text-[10px] ${r.winner === "candidate" ? "bg-emerald-500/20 text-emerald-300" : "bg-slate-800 text-slate-400"}">ganador: ${r.winner}</span>
+            <p class="text-slate-300 mt-1">${r.hypothesis || ""}</p>
+            <p class="text-[11px] text-slate-500">Editados: ${(r.edited_files || []).join(", ") || "ninguno"}</p>
+          </div>
+          ${r.winner === "candidate" ? `<button type="button" data-promote-id="${r.run_id}" class="js-promote-run px-3 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-semibold cursor-pointer">Promover</button>` : ""}
+        </div>
+      `).join("");
+
+      listEl.querySelectorAll(".js-promote-run").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const runId = btn.getAttribute("data-promote-id");
+          btn.disabled = true;
+          try {
+            const pr = await fetch("/api/harness/promote", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ run_id: runId }),
+            });
+            const out = await pr.json();
+            msgEl.classList.remove("hidden");
+            msgEl.textContent = pr.ok
+              ? `Candidato ${runId} promovido en caliente (hash: ${out.harness?.harness_hash}, backup: ${out.backup}).`
+              : `Error al promover: ${out.detail || "fallo"}`;
+            await refreshHarnessStatus();
+          } finally {
+            btn.disabled = false;
+          }
+        });
+      });
+    } catch (e) {
+      badge.textContent = "Harness no disponible";
+    }
+  }
+
+  document.getElementById("btnHarnessOptimize")?.addEventListener("click", async () => {
+    const msgEl = document.getElementById("harnessStatusMsg");
+    const focus = document.getElementById("harnessFocusInput")?.value || "";
+    const rounds = Number(document.getElementById("harnessRoundsInput")?.value || 1);
+    const auto_promote = Boolean(document.getElementById("harnessAutoPromote")?.checked);
+    msgEl.classList.remove("hidden");
+    msgEl.textContent = "Iniciando optimización online...";
+    try {
+      const res = await fetch("/api/harness/optimize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ focus, rounds, max_fixtures: 3, auto_promote }),
+      });
+      const out = await res.json();
+      if (!res.ok) {
+        msgEl.textContent = out.detail || "No se pudo iniciar la optimización.";
+        return;
+      }
+      msgEl.textContent = `Optimización iniciada sobre ${out.fixtures_available} fixture(s)...`;
+      await refreshHarnessStatus();
+    } catch (e) {
+      msgEl.textContent = `Error: ${e.message}`;
+    }
+  });
+
+  document.getElementById("btnHarnessRollback")?.addEventListener("click", async () => {
+    const msgEl = document.getElementById("harnessStatusMsg");
+    msgEl.classList.remove("hidden");
+    try {
+      const res = await fetch("/api/harness/rollback", { method: "POST" });
+      const out = await res.json();
+      msgEl.textContent = res.ok
+        ? `Rollback aplicado desde ${out.restored_from} (hash activo: ${out.harness?.harness_hash}).`
+        : out.detail || "No hay backups para revertir.";
+      await refreshHarnessStatus();
+    } catch (e) {
+      msgEl.textContent = `Error en rollback: ${e.message}`;
+    }
+  });
+
+  refreshHarnessStatus();
 </script>
 

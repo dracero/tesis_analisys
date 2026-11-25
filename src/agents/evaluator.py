@@ -4,11 +4,13 @@ import json
 import logging
 import os
 import threading
-from typing import Dict, Any, Tuple, List
+from pathlib import Path
+from typing import Dict, Any, Tuple, List, Optional
 
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_google_genai import ChatGoogleGenerativeAI
 
+from src.harness_loader import load_harness
 from src.key_manager import get_key_rotator, mask_key, redact_keys
 from src.state import (
     GraphState,
@@ -60,9 +62,7 @@ Además, genera:
 
 Responde estrictamente en el formato estructurado solicitado y en español."""
 
-EVALUATOR_PROMPT = ChatPromptTemplate.from_messages([
-    ("system", SYSTEM_PROMPT),
-    ("human", """Analiza la siguiente tesis y su evidencia verificada:
+HUMAN_EVALUATION_TEMPLATE = """Analiza la siguiente tesis y su evidencia verificada:
 
 === METADATOS DE LA TESIS ===
 Archivo: {filename}
@@ -99,11 +99,10 @@ Páginas: {page_count}
 
 [Resultados / Discusión / Conclusiones]:
 {end_excerpt}
-""")
-])
+"""
 
 _client_lock = threading.Lock()
-_chain_cache: Dict[Tuple[str, str], Any] = {}
+_chain_cache: Dict[Tuple[str, str, str], Any] = {}
 
 
 def _is_quota_error(err_msg: str) -> bool:
@@ -119,13 +118,23 @@ def _is_auth_error(err_msg: str) -> bool:
     ))
 
 
-def _get_or_create_chain(model_name: str, api_key: str) -> Any:
-    cache_key = (model_name, api_key)
+def _get_or_create_chain(
+    model_name: str,
+    api_key: str,
+    harness_dir: Optional[str | Path] = None,
+) -> Any:
+    loaded = load_harness(harness_dir)
+    effective_system = loaded.composed_system_prompt or SYSTEM_PROMPT
+    cache_key = (model_name, api_key, loaded.content_hash)
     with _client_lock:
         chain = _chain_cache.get(cache_key)
         if chain is None:
-            if len(_chain_cache) >= 16:
+            if len(_chain_cache) >= 24:
                 _chain_cache.pop(next(iter(_chain_cache)))
+            prompt = ChatPromptTemplate.from_messages([
+                ("system", "{system_prompt}"),
+                ("human", HUMAN_EVALUATION_TEMPLATE),
+            ]).partial(system_prompt=effective_system)
             llm = ChatGoogleGenerativeAI(
                 model=model_name,
                 google_api_key=api_key,
@@ -133,7 +142,7 @@ def _get_or_create_chain(model_name: str, api_key: str) -> Any:
                 max_retries=0,
                 timeout=90,
             )
-            chain = EVALUATOR_PROMPT | llm.with_structured_output(ThesisEvaluation)
+            chain = prompt | llm.with_structured_output(ThesisEvaluation)
             _chain_cache[cache_key] = chain
         return chain
 
@@ -257,8 +266,9 @@ def evaluate_thesis(
     filename: str,
     parsed: Dict[str, Any],
     verification: Dict[str, Any],
+    harness_dir: Optional[str | Path] = None,
 ) -> ThesisEvaluation:
-    """Ejecuta la evaluación completa con Gemini 3.6 rotando API keys."""
+    """Ejecuta la evaluación completa con Gemini 3.6 rotando API keys y usando el harness modular."""
     rotator = get_key_rotator()
     ordered_keys = rotator.next_ordered_keys()
     if not ordered_keys:
@@ -297,7 +307,7 @@ def evaluate_thesis(
 
     for key_idx, api_key in ordered_keys:
         try:
-            chain = _get_or_create_chain(model_name, api_key)
+            chain = _get_or_create_chain(model_name, api_key, harness_dir=harness_dir)
             result: ThesisEvaluation = chain.invoke(payload)
             rotator.report_success(api_key)
             return result

@@ -3,22 +3,37 @@
 import asyncio
 import json
 import os
+import re
+import shutil
 import tempfile
-from typing import AsyncGenerator
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, AsyncGenerator, Dict, Optional
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
 
 load_dotenv()
 
+from harness.scripts.verify_single_ref import verify_reference
+from scripts.harness2_offline import (
+    CANDIDATES_DIR,
+    EDITABLE_FILES,
+    FIXTURES_DIR,
+    LEDGER_PATH,
+    RUNS_DIR,
+    cmd_optimize,
+)
 from src.agents.evaluator import evaluate_thesis
 from src.agents.pdf_parser import parse_thesis_pdf
 from src.agents.reporter import generate_thesis_markdown_report
 from src.agents.verifier import verify_references_and_field_async
 from src.graph import build_graph
+from src.harness_loader import get_harness_metadata, resolve_harness_dir, save_harness_fixture
 from src.key_manager import get_key_rotator
 
 app = FastAPI(
@@ -83,6 +98,7 @@ async def get_config():
         "gemini_keys_count": key_status["total_keys"],
         "gemini_key_status": key_status,
         "model": model,
+        "harness": get_harness_metadata(),
     }
 
 
@@ -108,6 +124,12 @@ async def analyze_thesis_rest(
             "summary_report": "",
         }
         final_state = await asyncio.to_thread(graph.invoke, initial_state)
+        save_harness_fixture(
+            filename=file.filename or "tesis.pdf",
+            thesis_topic=thesis_topic,
+            parsed_thesis=final_state.get("parsed_thesis", {}),
+            verification_results=final_state.get("verification_results", {}),
+        )
         return {
             "filename": file.filename,
             "parsed_thesis": final_state.get("parsed_thesis", {}),
@@ -149,6 +171,12 @@ async def _thesis_stream_generator(
         # Paso 2: Verificación web/académica de muestreo (5-10 refs) + literatura del campo
         yield send_event("verifier", f"Verificando {min(sample_size, bib_count)} referencias clave en Crossref, OpenAlex, DuckDuckGo y Crawl4AI...")
         verification = await verify_references_and_field_async(parsed, sample_size=sample_size)
+        save_harness_fixture(
+            filename=filename,
+            thesis_topic=thesis_topic,
+            parsed_thesis=parsed,
+            verification_results=verification,
+        )
         yield send_event(
             "verifier_done",
             f"Muestreo verificado: {verification.get('verified_count', 0)} confirmadas, {verification.get('partial_count', 0)} parciales, {verification.get('suspect_or_missing_count', 0)} sospechosas/no halladas.",
@@ -213,6 +241,178 @@ async def analyze_thesis_stream(
         ),
         media_type="text/event-stream",
     )
+
+
+# ==============================================================================
+# ENDPOINTS ONLINE DE HARNESS² (Optimización, Promoción con Backup, Rollback y Verify-Ref)
+# ==============================================================================
+HARNESS_BACKUPS_DIR = RUNS_DIR / "backups"
+_harness_lock = asyncio.Lock()
+_harness_job: Dict[str, Any] = {
+    "state": "idle",  # idle | running | done | error
+    "started_at": None,
+    "finished_at": None,
+    "rounds_total": 0,
+    "rounds_completed": 0,
+    "last_results": [],
+    "error": None,
+}
+
+
+class HarnessOptimizeRequest(BaseModel):
+    focus: str = Field(default="")
+    max_fixtures: int = Field(default=3, ge=1, le=10)
+    rounds: int = Field(default=1, ge=1, le=3)
+    auto_promote: bool = Field(default=False)
+
+
+class HarnessPromoteRequest(BaseModel):
+    run_id: str = Field(..., min_length=4, max_length=64)
+
+
+class VerifyRefRequest(BaseModel):
+    query: str = Field(default="")
+    doi: str = Field(default="")
+
+
+def _promote_candidate_dir(candidate_dir: Path) -> Path:
+    prod_harness = resolve_harness_dir()
+    HARNESS_BACKUPS_DIR.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    backup_dir = HARNESS_BACKUPS_DIR / ts
+    shutil.copytree(prod_harness, backup_dir)
+    for rel in EDITABLE_FILES:
+        src = candidate_dir / rel
+        if src.is_file():
+            dst = prod_harness / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst)
+    return backup_dir
+
+
+def _read_recent_ledger(limit: int = 10) -> list[dict[str, Any]]:
+    if not LEDGER_PATH.is_file():
+        return []
+    rows: list[dict[str, Any]] = []
+    for line in LEDGER_PATH.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rows.append(json.loads(line))
+        except Exception:
+            continue
+    return list(reversed(rows[-limit:]))
+
+
+@app.get("/api/harness/status")
+async def get_harness_status():
+    fixtures = sorted(p.name for p in FIXTURES_DIR.glob("*.json")) if FIXTURES_DIR.is_dir() else []
+    backups = sorted(p.name for p in HARNESS_BACKUPS_DIR.iterdir() if p.is_dir()) if HARNESS_BACKUPS_DIR.is_dir() else []
+    return {
+        "harness": get_harness_metadata(),
+        "fixtures_count": len(fixtures),
+        "fixtures": fixtures,
+        "backups_count": len(backups),
+        "latest_backup": backups[-1] if backups else None,
+        "job": _harness_job,
+        "recent_runs": _read_recent_ledger(10),
+    }
+
+
+async def _run_harness_optimize_job(req: HarnessOptimizeRequest) -> None:
+    async with _harness_lock:
+        _harness_job.update(
+            {
+                "state": "running",
+                "started_at": datetime.now(timezone.utc).isoformat(),
+                "finished_at": None,
+                "rounds_total": req.rounds,
+                "rounds_completed": 0,
+                "last_results": [],
+                "error": None,
+            }
+        )
+        try:
+            results = []
+            for _ in range(req.rounds):
+                entry = await asyncio.to_thread(cmd_optimize, req.max_fixtures, req.focus)
+                promoted = False
+                if req.auto_promote and entry.get("winner") == "candidate" and entry.get("edited_files"):
+                    _promote_candidate_dir(Path(entry["candidate_dir"]))
+                    promoted = True
+                results.append({**entry, "promoted": promoted})
+                _harness_job["rounds_completed"] += 1
+                _harness_job["last_results"] = results
+            _harness_job["state"] = "done"
+            _harness_job["finished_at"] = datetime.now(timezone.utc).isoformat()
+        except Exception as err:
+            _harness_job["state"] = "error"
+            _harness_job["error"] = str(err)
+            _harness_job["finished_at"] = datetime.now(timezone.utc).isoformat()
+
+
+@app.post("/api/harness/optimize")
+async def start_harness_optimize(req: HarnessOptimizeRequest):
+    fixtures = list(FIXTURES_DIR.glob("*.json")) if FIXTURES_DIR.is_dir() else []
+    if not fixtures:
+        raise HTTPException(
+            status_code=400,
+            detail="No hay fixtures capturados todavía. Analizá al menos una tesis en PDF primero para generar su fixture automáticamente.",
+        )
+    if _harness_job["state"] == "running":
+        raise HTTPException(status_code=409, detail="Ya hay una optimización de Harness² en ejecución.")
+
+    asyncio.create_task(_run_harness_optimize_job(req))
+    return {"started": True, "fixtures_available": len(fixtures), "rounds": req.rounds}
+
+
+@app.post("/api/harness/promote")
+async def promote_harness_run(req: HarnessPromoteRequest):
+    if not re.fullmatch(r"[0-9_]+", req.run_id):
+        raise HTTPException(status_code=400, detail="run_id inválido.")
+    cand_dir = (CANDIDATES_DIR / req.run_id).resolve()
+    if not cand_dir.is_dir() or CANDIDATES_DIR.resolve() not in cand_dir.parents:
+        raise HTTPException(status_code=404, detail=f"Candidato no encontrado: {req.run_id}")
+
+    backup_dir = _promote_candidate_dir(cand_dir)
+    return {
+        "promoted": True,
+        "run_id": req.run_id,
+        "backup": backup_dir.name,
+        "harness": get_harness_metadata(),
+    }
+
+
+@app.post("/api/harness/rollback")
+async def rollback_harness():
+    if not HARNESS_BACKUPS_DIR.is_dir():
+        raise HTTPException(status_code=404, detail="No hay backups de harness disponibles.")
+    backups = sorted(p for p in HARNESS_BACKUPS_DIR.iterdir() if p.is_dir())
+    if not backups:
+        raise HTTPException(status_code=404, detail="No hay backups de harness disponibles.")
+
+    latest = backups[-1]
+    prod_harness = resolve_harness_dir()
+    for rel in EDITABLE_FILES:
+        src = latest / rel
+        if src.is_file():
+            dst = prod_harness / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst)
+
+    return {
+        "rolled_back": True,
+        "restored_from": latest.name,
+        "harness": get_harness_metadata(),
+    }
+
+
+@app.post("/api/harness/verify-ref")
+async def verify_single_ref_online(req: VerifyRefRequest):
+    if not req.query.strip() and not req.doi.strip():
+        raise HTTPException(status_code=400, detail="Indicá query o doi para verificar.")
+    return await asyncio.to_thread(verify_reference, req.query.strip(), req.doi.strip())
 
 
 astro_dist = os.path.join(os.path.dirname(__file__), "frontend", "dist")
