@@ -42,7 +42,14 @@ from src.agents.evaluator import DEFAULT_MODEL, evaluate_thesis
 from src.agents.pdf_parser import pdf_parser_node
 from src.agents.verifier import reference_verifier_node
 from src.harness_loader import resolve_harness_dir
-from src.key_manager import get_key_rotator
+from src.key_manager import (
+    get_key_rotator,
+    is_auth_error,
+    is_non_retryable_payload_error,
+    is_quota_error,
+    mask_key,
+    redact_keys,
+)
 
 RUNS_DIR = PROJECT_ROOT / "harness_runs"
 FIXTURES_DIR = RUNS_DIR / "fixtures"
@@ -84,13 +91,13 @@ def _slugify(name: str) -> str:
 
 def _invoke_structured(schema_cls: type[BaseModel], prompt: str) -> Any:
     rotator = get_key_rotator()
-    ordered = rotator.next_ordered_keys()
+    ordered = rotator.next_ordered_keys() or rotator.next_ordered_keys(include_cooling=True)
     if not ordered:
-        raise RuntimeError("No hay GEMINI_API_KEYS configuradas para ejecutar Propose/Compose offline.")
+        raise RuntimeError("No hay GEMINI_API_KEYS configuradas para ejecutar Propose/Compose.")
 
     model_name = os.getenv("GEMINI_MODEL", DEFAULT_MODEL).strip() or DEFAULT_MODEL
     last_err = None
-    for _, api_key in ordered:
+    for key_idx, api_key in ordered:
         try:
             llm = ChatGoogleGenerativeAI(
                 model=model_name,
@@ -103,7 +110,17 @@ def _invoke_structured(schema_cls: type[BaseModel], prompt: str) -> Any:
             rotator.report_success(api_key)
             return res
         except Exception as err:
-            last_err = err
+            err_msg = str(err)
+            last_err = redact_keys(err_msg)
+            if is_auth_error(err_msg):
+                rotator.report_invalid(api_key)
+                continue
+            if is_quota_error(err_msg):
+                rotator.report_rate_limit(api_key)
+                continue
+            if is_non_retryable_payload_error(err_msg):
+                raise RuntimeError(f"Error determinístico de payload/esquema con {model_name}: {last_err}") from err
+            print(f"[rotator] Error con {model_name} y key #{key_idx} ({mask_key(api_key)}): {last_err}. Rotando...")
             continue
     raise RuntimeError(f"Fallaron todas las claves Gemini en harness2_offline: {last_err}")
 

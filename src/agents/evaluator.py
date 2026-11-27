@@ -11,7 +11,14 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 from src.harness_loader import load_harness
-from src.key_manager import get_key_rotator, mask_key, redact_keys
+from src.key_manager import (
+    get_key_rotator,
+    is_auth_error,
+    is_non_retryable_payload_error,
+    is_quota_error,
+    mask_key,
+    redact_keys,
+)
 from src.state import (
     GraphState,
     ThesisEvaluation,
@@ -103,19 +110,6 @@ Páginas: {page_count}
 
 _client_lock = threading.Lock()
 _chain_cache: Dict[Tuple[str, str, str], Any] = {}
-
-
-def _is_quota_error(err_msg: str) -> bool:
-    lowered = err_msg.lower()
-    return any(tok in lowered for tok in ("429", "resource_exhausted", "quota", "rate limit", "too many requests"))
-
-
-def _is_auth_error(err_msg: str) -> bool:
-    lowered = err_msg.lower()
-    return any(tok in lowered for tok in (
-        "401", "403", "api_key_invalid", "api key not valid",
-        "invalid api key", "permission_denied", "expired", "unauthenticated"
-    ))
 
 
 def _get_or_create_chain(
@@ -313,14 +307,13 @@ def evaluate_thesis(
             return result
         except Exception as e:
             err_msg = str(e)
-            if _is_auth_error(err_msg):
+            if is_auth_error(err_msg):
                 rotator.report_invalid(api_key)
                 continue
-            if _is_quota_error(err_msg):
+            if is_quota_error(err_msg):
                 rotator.report_rate_limit(api_key)
                 continue
-            lowered = err_msg.lower()
-            if any(tok in lowered for tok in ("400", "invalid_argument", "validationerror", "context_length")):
+            if is_non_retryable_payload_error(err_msg):
                 logger.warning(f"Error determinístico de payload/esquema con Gemini ({redact_keys(err_msg)}); usando respaldo heurístico sin agotar claves.")
                 break
             logger.warning(f"Error con {model_name} y key #{key_idx} ({mask_key(api_key)}): {redact_keys(err_msg)}. Rotando clave...")

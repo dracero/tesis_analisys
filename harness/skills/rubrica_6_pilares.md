@@ -3,7 +3,7 @@
 1. **Dominio del campo (`dominio_del_campo`)**:
    - ¿Aparecen los autores y trabajos fundacionales del tema?
    - ¿Hay referencias a los debates actuales o el tesista se quedó en lo básico?
-   - ¿Hay ausencias llamativas? Compara la bibliografía de la tesis con la literatura fundacional y reciente recuperada de OpenAlex/Web y señala vacíos concretos ("Falta incorporar trabajos sobre X...").
+   - ¿Hay ausencias llamativas? Compara la bibliografía de la tesis con la literatura fundacional y reciente recuperada de OpenAlex/Web y señala vacíos concretos estrictamente pertinentes al alcance técnico y experimental del trabajo (`field_lit_json`), absteniéndote de proponer subdisciplinas no contempladas.
 
 2. **Calidad y jerarquía de las fuentes (`calidad_y_jerarquia`)**:
    - Proporción de fuentes primarias (papers originales, normas, datasets) frente a secundarias (libros/manuales/divulgación) y fuentes débiles (blogs, Wikipedia, sitios sin autoría).
@@ -27,4 +27,3 @@
 6. **Aspectos formales (`aspectos_formales`)**:
    - Norma consistente (APA, IEEE, etc.) aplicada de forma uniforme.
    - Datos completos: autores, año, título, fuente, DOI o URL con fecha de acceso cuando corresponda.
-

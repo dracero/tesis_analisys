@@ -188,3 +188,24 @@ def get_key_rotator() -> GeminiKeyRotator:
     """Obtiene la instancia global del rotador de API keys."""
     return _rotator
 
+
+def is_quota_error(err_msg: str) -> bool:
+    """Detecta errores de cuota o rate limit (HTTP 429 / RESOURCE_EXHAUSTED)."""
+    lowered = err_msg.lower()
+    return any(tok in lowered for tok in ("429", "resource_exhausted", "quota", "rate limit", "too many requests"))
+
+
+def is_auth_error(err_msg: str) -> bool:
+    """Detecta errores de autenticación o clave inválida (HTTP 401/403)."""
+    lowered = err_msg.lower()
+    return any(tok in lowered for tok in (
+        "401", "403", "api_key_invalid", "api key not valid",
+        "invalid api key", "permission_denied", "expired", "unauthenticated",
+    ))
+
+
+def is_non_retryable_payload_error(err_msg: str) -> bool:
+    """Detecta errores determinísticos de payload/esquema que no se resuelven rotando claves."""
+    lowered = err_msg.lower()
+    return any(tok in lowered for tok in ("400", "invalid_argument", "validationerror", "context_length"))
+
